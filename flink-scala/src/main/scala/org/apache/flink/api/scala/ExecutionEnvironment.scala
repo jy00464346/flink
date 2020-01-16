@@ -17,8 +17,6 @@
  */
 package org.apache.flink.api.scala
 
-import java.util.concurrent.CompletableFuture
-
 import com.esotericsoftware.kryo.Serializer
 import org.apache.flink.annotation.{Public, PublicEvolving}
 import org.apache.flink.api.common.io.{FileInputFormat, InputFormat}
@@ -32,7 +30,7 @@ import org.apache.flink.api.java.typeutils.runtime.kryo.KryoSerializer
 import org.apache.flink.api.java.typeutils.{PojoTypeInfo, TupleTypeInfoBase, ValueTypeInfo}
 import org.apache.flink.api.java.{CollectionEnvironment, ExecutionEnvironment => JavaEnv}
 import org.apache.flink.configuration.Configuration
-import org.apache.flink.core.execution.JobClient
+import org.apache.flink.core.execution.{JobClient, JobListener, PipelineExecutor}
 import org.apache.flink.core.fs.Path
 import org.apache.flink.types.StringValue
 import org.apache.flink.util.{NumberSequenceIterator, Preconditions, SplittableIterator}
@@ -495,6 +493,22 @@ class ExecutionEnvironment(javaEnv: JavaEnv) {
   }
 
   /**
+   * Register a [[JobListener]] in this environment. The [[JobListener]] will be
+   * notified on specific job status changed.
+   */
+  @PublicEvolving
+  def registerJobListener(jobListener: JobListener): Unit = {
+    javaEnv.registerJobListener(jobListener)
+  }
+
+  /**
+   * Clear all registered [[JobListener]]s.
+   */
+  @PublicEvolving def clearJobListeners(): Unit = {
+    javaEnv.clearJobListeners()
+  }
+
+  /**
    * Triggers the program execution asynchronously.
    * The environment will execute all parts of the program that have
    * resulted in a "sink" operation. Sink operations are for example printing results
@@ -508,11 +522,11 @@ class ExecutionEnvironment(javaEnv: JavaEnv) {
    * its usage. In other case, there may be resource leaks depending on the JobClient
    * implementation.
    *
-   * @return A future of [[JobClient]] that can be used to communicate with the submitted job,
+   * @return A [[JobClient]] that can be used to communicate with the submitted job,
    *         completed on submission succeeded.
    */
   @PublicEvolving
-  def executeAsync(): CompletableFuture[JobClient] = javaEnv.executeAsync()
+  def executeAsync(): JobClient = javaEnv.executeAsync()
 
   /**
    * Triggers the program execution asynchronously.
@@ -528,11 +542,11 @@ class ExecutionEnvironment(javaEnv: JavaEnv) {
    * its usage. In other case, there may be resource leaks depending on the JobClient
    * implementation.
    *
-   * @return A future of [[JobClient]] that can be used to communicate with the submitted job,
+   * @return A [[JobClient]] that can be used to communicate with the submitted job,
    *         completed on submission succeeded.
    */
   @PublicEvolving
-  def executeAsync(jobName: String): CompletableFuture[JobClient] = javaEnv.executeAsync(jobName)
+  def executeAsync(jobName: String): JobClient = javaEnv.executeAsync(jobName)
 
   /**
    * Creates the plan with which the system will execute the program, and returns it as  a String
@@ -545,8 +559,8 @@ class ExecutionEnvironment(javaEnv: JavaEnv) {
   /**
    * Creates the program's [[org.apache.flink.api.common.Plan]].
    * The plan is a description of all data sources, data sinks,
-   * and operations and how they interact, as an isolated unit that can be executed with a
-   * [[org.apache.flink.api.common.PlanExecutor]]. Obtaining a plan and starting it with an
+   * and operations and how they interact, as an isolated unit that can be executed with an
+   * [[PipelineExecutor]]. Obtaining a plan and starting it with an
    * executor is an alternative way to run a program and is only possible if the program only
    * consists of distributed operations.
    */

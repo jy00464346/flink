@@ -18,15 +18,15 @@
 
 package org.apache.flink.connectors.hive.read;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.io.LocatableInputSplitAssigner;
 import org.apache.flink.api.common.io.statistics.BaseStatistics;
 import org.apache.flink.api.java.hadoop.common.HadoopInputFormatCommonBase;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connectors.hive.FlinkHiveException;
-import org.apache.flink.connectors.hive.HiveOptions;
 import org.apache.flink.connectors.hive.HiveTablePartition;
 import org.apache.flink.core.io.InputSplitAssigner;
 import org.apache.flink.table.catalog.CatalogTable;
+import org.apache.flink.table.catalog.hive.client.HiveShimLoader;
 import org.apache.flink.table.dataformat.BaseRow;
 import org.apache.flink.table.types.DataType;
 
@@ -80,9 +80,10 @@ public class HiveTableInputFormat extends HadoopInputFormatCommonBase<BaseRow, H
 
 	private transient long currentReadCount = 0L;
 
-	private transient SplitReader reader;
+	@VisibleForTesting
+	protected transient SplitReader reader;
 
-	private transient Configuration parameters;
+	private boolean useMapRedReader;
 
 	public HiveTableInputFormat(
 			JobConf jobConf,
@@ -90,7 +91,8 @@ public class HiveTableInputFormat extends HadoopInputFormatCommonBase<BaseRow, H
 			List<HiveTablePartition> partitions,
 			int[] projectedFields,
 			long limit,
-			String hiveVersion) {
+			String hiveVersion,
+			boolean useMapRedReader) {
 		super(jobConf.getCredentials());
 		this.partitionKeys = catalogTable.getPartitionKeys();
 		this.fieldTypes = catalogTable.getSchema().getFieldDataTypes();
@@ -102,21 +104,21 @@ public class HiveTableInputFormat extends HadoopInputFormatCommonBase<BaseRow, H
 		this.jobConf = new JobConf(jobConf);
 		int rowArity = catalogTable.getSchema().getFieldCount();
 		selectedFields = projectedFields != null ? projectedFields : IntStream.range(0, rowArity).toArray();
+		this.useMapRedReader = useMapRedReader;
 	}
 
 	@Override
 	public void configure(org.apache.flink.configuration.Configuration parameters) {
-		this.parameters = parameters;
 	}
 
 	@Override
 	public void open(HiveTableInputSplit split) throws IOException {
-		if (!parameters.getBoolean(HiveOptions.TABLE_EXEC_HIVE_FALLBACK_MAPRED_READER) &&
-				useOrcVectorizedRead(split.getHiveTablePartition())) {
+		if (!useMapRedReader && useOrcVectorizedRead(split.getHiveTablePartition())) {
 			this.reader = new HiveVectorizedOrcSplitReader(
-					jobConf, fieldNames, fieldTypes, selectedFields, split);
+					hiveVersion, jobConf, fieldNames, fieldTypes, selectedFields, split);
 		} else {
-			this.reader = new HiveMapredSplitReader(jobConf, partitionKeys, fieldTypes, selectedFields, split);
+			this.reader = new HiveMapredSplitReader(jobConf, partitionKeys, fieldTypes, selectedFields, split,
+					HiveShimLoader.loadHiveShim(hiveVersion));
 		}
 		currentReadCount = 0L;
 	}
@@ -248,6 +250,7 @@ public class HiveTableInputFormat extends HadoopInputFormatCommonBase<BaseRow, H
 		out.writeObject(selectedFields);
 		out.writeObject(limit);
 		out.writeObject(hiveVersion);
+		out.writeBoolean(useMapRedReader);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -269,5 +272,6 @@ public class HiveTableInputFormat extends HadoopInputFormatCommonBase<BaseRow, H
 		selectedFields = (int[]) in.readObject();
 		limit = (long) in.readObject();
 		hiveVersion = (String) in.readObject();
+		useMapRedReader = in.readBoolean();
 	}
 }

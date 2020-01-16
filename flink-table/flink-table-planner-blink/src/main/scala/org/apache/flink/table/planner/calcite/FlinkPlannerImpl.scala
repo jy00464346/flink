@@ -30,7 +30,7 @@ import org.apache.calcite.rel.{RelFieldCollation, RelRoot}
 import org.apache.calcite.sql.advise.{SqlAdvisor, SqlAdvisorValidator}
 import org.apache.calcite.sql.{SqlKind, SqlNode, SqlOperatorTable}
 import org.apache.calcite.sql2rel.{SqlRexConvertletTable, SqlToRelConverter}
-import org.apache.calcite.tools.{FrameworkConfig, RelBuilder, RelConversionException}
+import org.apache.calcite.tools.{FrameworkConfig, RelConversionException}
 
 import java.lang.{Boolean => JBoolean}
 import java.util
@@ -117,7 +117,10 @@ class FlinkPlannerImpl(
       }
       // no need to validate row type for DDL and insert nodes.
       if (sqlNode.getKind.belongsTo(SqlKind.DDL)
-        || sqlNode.getKind == SqlKind.INSERT) {
+        || sqlNode.getKind == SqlKind.INSERT
+        || sqlNode.getKind == SqlKind.CREATE_FUNCTION
+        || sqlNode.getKind == SqlKind.DROP_FUNCTION
+        || sqlNode.getKind == SqlKind.OTHER_DDL) {
         return sqlNode
       }
       validator.validate(sqlNode)
@@ -182,23 +185,13 @@ class FlinkPlannerImpl(
     )
     val validator = createSqlValidator(readerWithPathAdjusted)
     val validated = validate(parsed, validator)
-    val equivRel = rel(validated, validator)
-    if (!RelOptUtil.areRowTypesEqual(
-      rowType,
-      equivRel.validatedRowType,
-      true
-    )) {
-      throw new TableException(
-        s"""Could not expand view. Types mismatch.
-           | Expected row type: $rowType
-           | Expanded view type: ${equivRel.validatedRowType}
-           |""".stripMargin)
-    }
-    equivRel
+    rel(validated, validator)
   }
 
-  override def createRelBuilder(): RelBuilder = {
-    sqlToRelConverterConfig.getRelBuilderFactory.create(cluster, null)
+  override def createRelBuilder(): FlinkRelBuilder = {
+    sqlToRelConverterConfig.getRelBuilderFactory
+      .create(cluster, null)
+      .asInstanceOf[FlinkRelBuilder]
   }
 }
 

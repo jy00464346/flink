@@ -171,7 +171,7 @@ object ScalarOperatorGens {
         resultType.getTypeRoot match {
           case DATE =>
             generateOperatorIfNotNull(ctx, new DateType(), left, right) {
-              (l, r) => s"$l $op ((int) ($r / ${MILLIS_PER_DAY}L))"
+              (l, r) => s"$l $op (java.lang.Math.toIntExact($r / ${MILLIS_PER_DAY}L))"
             }
           case TIMESTAMP_WITHOUT_TIME_ZONE =>
             generateOperatorIfNotNull(ctx, resultType, left, right) {
@@ -186,7 +186,13 @@ object ScalarOperatorGens {
 
       case (TIME_WITHOUT_TIME_ZONE, INTERVAL_DAY_TIME) =>
         generateOperatorIfNotNull(ctx, new TimeType(), left, right) {
-          (l, r) => s"$l $op ((int) ($r))"
+          (l, r) => s"java.lang.Math.toIntExact((($l + ${MILLIS_PER_DAY}L) $op (" +
+            s"java.lang.Math.toIntExact($r % ${MILLIS_PER_DAY}L))) % ${MILLIS_PER_DAY}L)"
+        }
+
+      case (TIME_WITHOUT_TIME_ZONE, INTERVAL_YEAR_MONTH) =>
+        generateOperatorIfNotNull(ctx, new TimeType(), left, right) {
+          (l, r) => s"$l"
         }
 
       case (TIMESTAMP_WITHOUT_TIME_ZONE, INTERVAL_DAY_TIME) =>
@@ -504,6 +510,13 @@ object ScalarOperatorGens {
 
       // both sides are timestamp
       else if (isTimestamp(left.resultType) && isTimestamp(right.resultType)) {
+        (leftTerm, rightTerm) =>
+          s"$leftTerm.compareTo($rightTerm) $operator 0"
+      }
+
+      // both sides are timestamp with local zone
+      else if (isTimestampWithLocalZone(left.resultType) &&
+          isTimestampWithLocalZone(right.resultType)) {
         (leftTerm, rightTerm) =>
           s"$leftTerm.compareTo($rightTerm) $operator 0"
       }
@@ -842,19 +855,54 @@ object ScalarOperatorGens {
       }
 
     case (TIMESTAMP_WITHOUT_TIME_ZONE, TIMESTAMP_WITH_LOCAL_TIME_ZONE) =>
+      val fromType = operand.resultType.asInstanceOf[TimestampType]
+      val toType = targetType.asInstanceOf[LocalZonedTimestampType]
       val method = qualifyMethod(BuiltInMethods.TIMESTAMP_TO_TIMESTAMP_WITH_LOCAL_ZONE)
-      generateUnaryOperatorIfNotNull(ctx, targetType, operand) {
-        operandTerm =>
-          val timeZone = ctx.addReusableTimeZone()
-          s"$method($operandTerm.getMillisecond(), $timeZone)"
+      if (fromType.getPrecision < toType.getPrecision) {
+        generateUnaryOperatorIfNotNull(ctx, targetType, operand) {
+          operandTerm =>
+            val timeZone = ctx.addReusableTimeZone()
+            s"$method($operandTerm, $timeZone)"
+        }
+      } else {
+        val truncate_method = qualifyMethod(BuiltInMethods.TRUNCATE_SQL_TIMESTAMP)
+        generateUnaryOperatorIfNotNull(ctx, targetType, operand) {
+          operandTerm =>
+            val timeZone = ctx.addReusableTimeZone()
+            s"$truncate_method($method($operandTerm, $timeZone), ${toType.getPrecision})"
+        }
       }
 
     case (TIMESTAMP_WITH_LOCAL_TIME_ZONE, TIMESTAMP_WITHOUT_TIME_ZONE) =>
+      val fromType = operand.resultType.asInstanceOf[LocalZonedTimestampType]
+      val toType = targetType.asInstanceOf[TimestampType]
       val method = qualifyMethod(BuiltInMethods.TIMESTAMP_WITH_LOCAL_ZONE_TO_TIMESTAMP)
-      generateUnaryOperatorIfNotNull(ctx, targetType, operand) {
-        operandTerm =>
-          val zone = ctx.addReusableTimeZone()
-          s"$SQL_TIMESTAMP.fromEpochMillis($method($operandTerm, $zone))"
+      if (fromType.getPrecision < toType.getPrecision) {
+        generateUnaryOperatorIfNotNull(ctx, targetType, operand) {
+          operandTerm =>
+            val zone = ctx.addReusableTimeZone()
+            s"$method($operandTerm, $zone)"
+        }
+      } else {
+        val truncate_method = qualifyMethod(BuiltInMethods.TRUNCATE_SQL_TIMESTAMP)
+        generateUnaryOperatorIfNotNull(ctx, targetType, operand) {
+          operandTerm =>
+            val zone = ctx.addReusableTimeZone()
+            s"$truncate_method($method($operandTerm, $zone), ${toType.getPrecision})"
+        }
+      }
+
+    case (TIMESTAMP_WITH_LOCAL_TIME_ZONE, TIMESTAMP_WITH_LOCAL_TIME_ZONE) =>
+      val fromType = operand.resultType.asInstanceOf[LocalZonedTimestampType]
+      val toType = targetType.asInstanceOf[LocalZonedTimestampType]
+      if (fromType.getPrecision <= toType.getPrecision) {
+        operand.copy(resultType = targetType)
+      } else {
+        val method = qualifyMethod(BuiltInMethods.TRUNCATE_SQL_TIMESTAMP)
+        generateUnaryOperatorIfNotNull(ctx, targetType, operand) {
+          operandTerm =>
+            s"$method($operandTerm, ${toType.getPrecision})"
+        }
       }
 
     // identity casting
@@ -989,8 +1037,7 @@ object ScalarOperatorGens {
         resultNullable = true) {
         operandTerm =>
           s"""
-             |$SQL_TIMESTAMP.fromEpochMillis(
-             | ${qualifyMethod(BuiltInMethod.STRING_TO_TIMESTAMP.method)}($operandTerm.toString()))
+             |${qualifyMethod(BuiltInMethods.STRING_TO_TIMESTAMP)}($operandTerm.toString())
            """.stripMargin
       }
 
@@ -999,7 +1046,7 @@ object ScalarOperatorGens {
         ctx, targetType, operand, resultNullable = true) { operandTerm =>
         val zone = ctx.addReusableTimeZone()
         val method = qualifyMethod(BuiltInMethods.STRING_TO_TIMESTAMP_TIME_ZONE)
-        s"$method($operandTerm.toString(), $zone)"
+        s"$SQL_TIMESTAMP.fromEpochMillis($method($operandTerm.toString(), $zone))"
       }
 
     // String -> binary
@@ -1092,7 +1139,7 @@ object ScalarOperatorGens {
       generateUnaryOperatorIfNotNull(ctx, targetType, operand) { operandTerm =>
         val zone = ctx.addReusableTimeZone()
         val method = qualifyMethod(BuiltInMethods.DATE_TO_TIMESTAMP_WITH_LOCAL_TIME_ZONE)
-        s"$method($operandTerm, $zone)"
+        s"$SQL_TIMESTAMP.fromEpochMillis($method($operandTerm, $zone))"
       }
 
     // Timestamp with local time zone -> Date
@@ -1100,7 +1147,7 @@ object ScalarOperatorGens {
       generateUnaryOperatorIfNotNull(ctx, targetType, operand) { operandTerm =>
         val zone = ctx.addReusableTimeZone()
         val method = qualifyMethod(BuiltInMethods.TIMESTAMP_WITH_LOCAL_TIME_ZONE_TO_DATE)
-        s"$method($operandTerm, $zone)"
+        s"$method($operandTerm.getMillisecond(), $zone)"
       }
 
     // Time -> Timestamp with local time zone
@@ -1108,7 +1155,7 @@ object ScalarOperatorGens {
       generateUnaryOperatorIfNotNull(ctx, targetType, operand) { operandTerm =>
         val zone = ctx.addReusableTimeZone()
         val method = qualifyMethod(BuiltInMethods.TIME_TO_TIMESTAMP_WITH_LOCAL_TIME_ZONE)
-        s"$method($operandTerm, $zone)"
+        s"$SQL_TIMESTAMP.fromEpochMillis($method($operandTerm, $zone))"
       }
 
     // Timestamp with local time zone -> Time
@@ -1116,7 +1163,7 @@ object ScalarOperatorGens {
       generateUnaryOperatorIfNotNull(ctx, targetType, operand) { operandTerm =>
         val zone = ctx.addReusableTimeZone()
         val method = qualifyMethod(BuiltInMethods.TIMESTAMP_WITH_LOCAL_TIME_ZONE_TO_TIME)
-        s"$method($operandTerm, $zone)"
+        s"$method($operandTerm.getMillisecond(), $zone)"
       }
 
     // Timestamp -> Decimal
@@ -1238,21 +1285,26 @@ object ScalarOperatorGens {
 
       val Seq(resultTerm, nullTerm) = newNames("result", "isNull")
       val resultTypeTerm = primitiveTypeTermForType(resultType)
+      val defaultValue = primitiveDefaultValue(resultType)
 
       val operatorCode = if (ctx.nullCheck) {
         s"""
            |${condition.code}
-           |$resultTypeTerm $resultTerm;
+           |$resultTypeTerm $resultTerm = $defaultValue;
            |boolean $nullTerm;
            |if (${condition.resultTerm}) {
            |  ${trueAction.code}
-           |  $resultTerm = ${trueAction.resultTerm};
            |  $nullTerm = ${trueAction.nullTerm};
+           |  if (!$nullTerm) {
+           |    $resultTerm = ${trueAction.resultTerm};
+           |  }
            |}
            |else {
            |  ${falseAction.code}
-           |  $resultTerm = ${falseAction.resultTerm};
            |  $nullTerm = ${falseAction.nullTerm};
+           |  if (!$nullTerm) {
+           |    $resultTerm = ${falseAction.resultTerm};
+           |  }
            |}
            |""".stripMargin.trim
       }
@@ -2236,8 +2288,7 @@ object ScalarOperatorGens {
         s"${qualifyMethod(BuiltInMethods.STRING_TO_TIME)}($operandTerm.toString())"
       case TIMESTAMP_WITHOUT_TIME_ZONE =>
         s"""
-           |${SQL_TIMESTAMP}.fromEpochMillis(
-           |  ${qualifyMethod(BuiltInMethod.STRING_TO_TIMESTAMP.method)}($operandTerm.toString()))
+           |${qualifyMethod(BuiltInMethods.STRING_TO_TIMESTAMP)}($operandTerm.toString())
            |""".stripMargin
       case _ => throw new UnsupportedOperationException
     }
@@ -2258,7 +2309,7 @@ object ScalarOperatorGens {
       case TIMESTAMP_WITH_LOCAL_TIME_ZONE =>
         val method = qualifyMethod(BuiltInMethods.TIMESTAMP_TO_STRING_TIME_ZONE)
         val zone = ctx.addReusableTimeZone()
-        s"$method($operandTerm, 3, $zone)"
+        s"$method($operandTerm, $zone)"
     }
 
 }

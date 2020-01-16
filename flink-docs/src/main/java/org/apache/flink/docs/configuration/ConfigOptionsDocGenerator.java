@@ -70,7 +70,8 @@ public class ConfigOptionsDocGenerator {
 		new OptionsClassLocation("flink-metrics/flink-metrics-prometheus", "org.apache.flink.metrics.prometheus"),
 		new OptionsClassLocation("flink-state-backends/flink-statebackend-rocksdb", "org.apache.flink.contrib.streaming.state"),
 		new OptionsClassLocation("flink-table/flink-table-api-java", "org.apache.flink.table.api.config"),
-		new OptionsClassLocation("flink-python", "org.apache.flink.python")
+		new OptionsClassLocation("flink-python", "org.apache.flink.python"),
+		new OptionsClassLocation("flink-kubernetes", "org.apache.flink.kubernetes.configuration")
 	};
 
 	static final Set<String> EXCLUSIONS = new HashSet<>(Arrays.asList(
@@ -78,7 +79,8 @@ public class ConfigOptionsDocGenerator {
 		"org.apache.flink.configuration.WritableConfig",
 		"org.apache.flink.configuration.ConfigOptions",
 		"org.apache.flink.streaming.api.environment.CheckpointConfig",
-		"org.apache.flink.contrib.streaming.state.PredefinedOptions"));
+		"org.apache.flink.contrib.streaming.state.PredefinedOptions",
+		"org.apache.flink.python.PythonConfig"));
 
 	static final String DEFAULT_PATH_PREFIX = "src/main/java";
 

@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.clusterframework;
 
+import org.apache.flink.api.common.resources.CPUResource;
 import org.apache.flink.configuration.MemorySize;
 
 import java.io.Serializable;
@@ -28,20 +29,17 @@ import java.io.Serializable;
  * <p>A TaskExecutor's memory consists of the following components.
  * <ul>
  *     <li>Framework Heap Memory</li>
+ *     <li>Framework Off-Heap Memory</li>
  *     <li>Task Heap Memory</li>
  *     <li>Task Off-Heap Memory</li>
- *     <li>Shuffle Memory</li>
+ *     <li>Network Memory</li>
  *     <li>Managed Memory</li>
- *     <ul>
- *         <li>On-Heap Managed Memory</li>
- *         <li>Off-Heap Managed Memory</li>
- *     </ul>
  *     <li>JVM Metaspace</li>
  *     <li>JVM Overhead</li>
  * </ul>
- * Among all the components, Framework Heap Memory, Task Heap Memory and On-Heap Managed Memory use on heap memory,
- * while the rest use off heap memory. We use Total Process Memory to refer to all the memory components, while Total
- * Flink Memory refering to all the components except JVM Metaspace and JVM Overhead.
+ * Among all the components, Framework Heap Memory and Task Heap Memory use on heap memory, while the rest use off heap
+ * memory. We use Total Process Memory to refer to all the memory components, while Total Flink Memory refering to all
+ * the components except JVM Metaspace and JVM Overhead.
  *
  * <p>The relationships of TaskExecutor memory components are shown below.
  * <pre>
@@ -50,22 +48,21 @@ import java.io.Serializable;
  *               │ ┌───────────────────────────┐ │
  *                ││   Framework Heap Memory   ││  ─┐
  *               │ └───────────────────────────┘ │  │
- *                │┌───────────────────────────┐│   │
- *               │ │     Task Heap Memory      │ │ ─┤
- *                │└───────────────────────────┘│   │
  *               │ ┌───────────────────────────┐ │  │
- *            ┌─  ││   Task Off-Heap Memory    ││   │
- *            │  │ └───────────────────────────┘ │  ├─ On-Heap
+ *            ┌─  ││ Framework Off-Heap Memory ││   ├─ On-Heap
+ *            │  │ └───────────────────────────┘ │  │
  *            │   │┌───────────────────────────┐│   │
- *            ├─ │ │      Shuffle Memory       │ │  │
- *            │   │└───────────────────────────┘│   │
- *            │  │ ┌───── Managed Memory ──────┐ │  │
- *            │   ││┌─────────────────────────┐││   │
- *            │  │ ││ On-Heap Managed Memory  ││ │ ─┘
- *            │   ││├─────────────────────────┤││
- *  Off-Heap ─┼─ │ ││ Off-Heap Managed Memory ││ │
- *            │   ││└─────────────────────────┘││
+ *            │  │ │     Task Heap Memory      │ │ ─┘
+ *            │   │└───────────────────────────┘│
+ *            │  │ ┌───────────────────────────┐ │
+ *            ├─  ││   Task Off-Heap Memory    ││
  *            │  │ └───────────────────────────┘ │
+ *            │   │┌───────────────────────────┐│
+ *            ├─ │ │      Network Memory       │ │
+ *            │   │└───────────────────────────┘│
+ *            │  │ ┌───────────────────────────┐ │
+ *  Off-Heap ─┼─   │      Managed Memory       │
+ *            │  ││└───────────────────────────┘││
  *            │   └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
  *            │  │┌─────────────────────────────┐│
  *            ├─  │        JVM Metaspace        │
@@ -78,6 +75,8 @@ import java.io.Serializable;
  */
 public class TaskExecutorResourceSpec implements Serializable {
 
+	private final CPUResource cpuCores;
+
 	private final MemorySize frameworkHeapSize;
 
 	private final MemorySize frameworkOffHeapMemorySize;
@@ -86,36 +85,38 @@ public class TaskExecutorResourceSpec implements Serializable {
 
 	private final MemorySize taskOffHeapSize;
 
-	private final MemorySize shuffleMemSize;
+	private final MemorySize networkMemSize;
 
-	private final MemorySize onHeapManagedMemorySize;
-
-	private final MemorySize offHeapManagedMemorySize;
+	private final MemorySize managedMemorySize;
 
 	private final MemorySize jvmMetaspaceSize;
 
 	private final MemorySize jvmOverheadSize;
 
 	public TaskExecutorResourceSpec(
+		CPUResource cpuCores,
 		MemorySize frameworkHeapSize,
 		MemorySize frameworkOffHeapSize,
 		MemorySize taskHeapSize,
 		MemorySize taskOffHeapSize,
-		MemorySize shuffleMemSize,
-		MemorySize onHeapManagedMemorySize,
-		MemorySize offHeapManagedMemorySize,
+		MemorySize networkMemSize,
+		MemorySize managedMemorySize,
 		MemorySize jvmMetaspaceSize,
 		MemorySize jvmOverheadSize) {
 
+		this.cpuCores = cpuCores;
 		this.frameworkHeapSize = frameworkHeapSize;
 		this.frameworkOffHeapMemorySize = frameworkOffHeapSize;
 		this.taskHeapSize = taskHeapSize;
 		this.taskOffHeapSize = taskOffHeapSize;
-		this.shuffleMemSize = shuffleMemSize;
-		this.onHeapManagedMemorySize = onHeapManagedMemorySize;
-		this.offHeapManagedMemorySize = offHeapManagedMemorySize;
+		this.networkMemSize = networkMemSize;
+		this.managedMemorySize = managedMemorySize;
 		this.jvmMetaspaceSize = jvmMetaspaceSize;
 		this.jvmOverheadSize = jvmOverheadSize;
+	}
+
+	public CPUResource getCpuCores() {
+		return cpuCores;
 	}
 
 	public MemorySize getFrameworkHeapSize() {
@@ -134,20 +135,12 @@ public class TaskExecutorResourceSpec implements Serializable {
 		return taskOffHeapSize;
 	}
 
-	public MemorySize getShuffleMemSize() {
-		return shuffleMemSize;
-	}
-
-	public MemorySize getOnHeapManagedMemorySize() {
-		return onHeapManagedMemorySize;
-	}
-
-	public MemorySize getOffHeapManagedMemorySize() {
-		return offHeapManagedMemorySize;
+	public MemorySize getNetworkMemSize() {
+		return networkMemSize;
 	}
 
 	public MemorySize getManagedMemorySize() {
-		return onHeapManagedMemorySize.add(offHeapManagedMemorySize);
+		return managedMemorySize;
 	}
 
 	public MemorySize getJvmMetaspaceSize() {
@@ -159,7 +152,7 @@ public class TaskExecutorResourceSpec implements Serializable {
 	}
 
 	public MemorySize getTotalFlinkMemorySize() {
-		return frameworkHeapSize.add(frameworkOffHeapMemorySize).add(taskHeapSize).add(taskOffHeapSize).add(shuffleMemSize).add(getManagedMemorySize());
+		return frameworkHeapSize.add(frameworkOffHeapMemorySize).add(taskHeapSize).add(taskOffHeapSize).add(networkMemSize).add(getManagedMemorySize());
 	}
 
 	public MemorySize getTotalProcessMemorySize() {
@@ -167,23 +160,23 @@ public class TaskExecutorResourceSpec implements Serializable {
 	}
 
 	public MemorySize getJvmHeapMemorySize() {
-		return frameworkHeapSize.add(taskHeapSize).add(onHeapManagedMemorySize);
+		return frameworkHeapSize.add(taskHeapSize);
 	}
 
 	public MemorySize getJvmDirectMemorySize() {
-		return frameworkOffHeapMemorySize.add(taskOffHeapSize).add(shuffleMemSize);
+		return frameworkOffHeapMemorySize.add(taskOffHeapSize).add(networkMemSize);
 	}
 
 	@Override
 	public String toString() {
 		return "TaskExecutorResourceSpec {"
-			+ "frameworkHeapSize=" + frameworkHeapSize.toString()
+			+ "cpuCores=" + cpuCores.getValue().doubleValue()
+			+ ", frameworkHeapSize=" + frameworkHeapSize.toString()
 			+ ", frameworkOffHeapSize=" + frameworkOffHeapMemorySize.toString()
 			+ ", taskHeapSize=" + taskHeapSize.toString()
 			+ ", taskOffHeapSize=" + taskOffHeapSize.toString()
-			+ ", shuffleMemSize=" + shuffleMemSize.toString()
-			+ ", onHeapManagedMemorySize=" + onHeapManagedMemorySize.toString()
-			+ ", offHeapManagedMemorySize=" + offHeapManagedMemorySize.toString()
+			+ ", networkMemSize=" + networkMemSize.toString()
+			+ ", managedMemorySize=" + managedMemorySize.toString()
 			+ ", jvmMetaspaceSize=" + jvmMetaspaceSize.toString()
 			+ ", jvmOverheadSize=" + jvmOverheadSize.toString()
 			+ "}";

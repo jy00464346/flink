@@ -24,6 +24,7 @@ import org.apache.flink.runtime.deployment.InputGateDeploymentDescriptor;
 import org.apache.flink.runtime.io.network.ConnectionManager;
 import org.apache.flink.runtime.io.network.NettyShuffleEnvironment;
 import org.apache.flink.runtime.io.network.TaskEventPublisher;
+import org.apache.flink.runtime.io.network.buffer.BufferDecompressor;
 import org.apache.flink.runtime.io.network.buffer.BufferPool;
 import org.apache.flink.runtime.io.network.buffer.BufferPoolFactory;
 import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
@@ -75,6 +76,12 @@ public class SingleInputGateFactory {
 
 	private final int floatingNetworkBuffersPerGate;
 
+	private final boolean blockingShuffleCompressionEnabled;
+
+	private final String compressionCodec;
+
+	private final int networkBufferSize;
+
 	public SingleInputGateFactory(
 			@Nonnull ResourceID taskExecutorResourceId,
 			@Nonnull NettyShuffleEnvironmentConfiguration networkConfig,
@@ -87,6 +94,9 @@ public class SingleInputGateFactory {
 		this.partitionRequestMaxBackoff = networkConfig.partitionRequestMaxBackoff();
 		this.networkBuffersPerChannel = networkConfig.networkBuffersPerChannel();
 		this.floatingNetworkBuffersPerGate = networkConfig.floatingNetworkBuffersPerGate();
+		this.blockingShuffleCompressionEnabled = networkConfig.isBlockingShuffleCompressionEnabled();
+		this.compressionCodec = networkConfig.getCompressionCodec();
+		this.networkBufferSize = networkConfig.networkBufferSize();
 		this.connectionManager = connectionManager;
 		this.partitionManager = partitionManager;
 		this.taskEventPublisher = taskEventPublisher;
@@ -108,6 +118,11 @@ public class SingleInputGateFactory {
 			igdd.getShuffleDescriptors().length,
 			igdd.getConsumedPartitionType());
 
+		BufferDecompressor bufferDecompressor = null;
+		if (igdd.getConsumedPartitionType().isBlocking() && blockingShuffleCompressionEnabled) {
+			bufferDecompressor = new BufferDecompressor(networkBufferSize, compressionCodec);
+		}
+
 		SingleInputGate inputGate = new SingleInputGate(
 			owningTaskName,
 			igdd.getConsumedResultId(),
@@ -115,7 +130,8 @@ public class SingleInputGateFactory {
 			igdd.getConsumedSubpartitionIndex(),
 			igdd.getShuffleDescriptors().length,
 			partitionProducerStateProvider,
-			bufferPoolFactory);
+			bufferPoolFactory,
+			bufferDecompressor);
 
 		createInputChannels(owningTaskName, igdd, inputGate, metrics);
 		return inputGate;
@@ -224,8 +240,7 @@ public class SingleInputGateFactory {
 			int floatingNetworkBuffersPerGate,
 			int size,
 			ResultPartitionType type) {
-		int maxNumberOfMemorySegments = type.isBounded() ? floatingNetworkBuffersPerGate : Integer.MAX_VALUE;
-		return () -> bufferPoolFactory.createBufferPool(0, maxNumberOfMemorySegments);
+		return () -> bufferPoolFactory.createBufferPool(0, floatingNetworkBuffersPerGate);
 	}
 
 	private static class ChannelStatistics {
