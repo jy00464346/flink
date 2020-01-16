@@ -171,7 +171,7 @@ object ScalarOperatorGens {
         resultType.getTypeRoot match {
           case DATE =>
             generateOperatorIfNotNull(ctx, new DateType(), left, right) {
-              (l, r) => s"$l $op ((int) ($r / ${MILLIS_PER_DAY}L))"
+              (l, r) => s"$l $op (java.lang.Math.toIntExact($r / ${MILLIS_PER_DAY}L))"
             }
           case TIMESTAMP_WITHOUT_TIME_ZONE =>
             generateOperatorIfNotNull(ctx, new TimestampType(), left, right) {
@@ -186,7 +186,13 @@ object ScalarOperatorGens {
 
       case (TIME_WITHOUT_TIME_ZONE, INTERVAL_DAY_TIME) =>
         generateOperatorIfNotNull(ctx, new TimeType(), left, right) {
-          (l, r) => s"$l $op ((int) ($r))"
+          (l, r) => s"java.lang.Math.toIntExact((($l + ${MILLIS_PER_DAY}L) $op (" +
+            s"java.lang.Math.toIntExact($r % ${MILLIS_PER_DAY}L))) % ${MILLIS_PER_DAY}L)"
+        }
+
+      case (TIME_WITHOUT_TIME_ZONE, INTERVAL_YEAR_MONTH) =>
+        generateOperatorIfNotNull(ctx, new TimeType(), left, right) {
+          (l, r) => s"$l"
         }
 
       case (TIMESTAMP_WITHOUT_TIME_ZONE, INTERVAL_DAY_TIME) =>
@@ -1161,21 +1167,26 @@ object ScalarOperatorGens {
 
       val Seq(resultTerm, nullTerm) = newNames("result", "isNull")
       val resultTypeTerm = primitiveTypeTermForType(resultType)
+      val defaultValue = primitiveDefaultValue(resultType)
 
       val operatorCode = if (ctx.nullCheck) {
         s"""
            |${condition.code}
-           |$resultTypeTerm $resultTerm;
+           |$resultTypeTerm $resultTerm = $defaultValue;
            |boolean $nullTerm;
            |if (${condition.resultTerm}) {
            |  ${trueAction.code}
-           |  $resultTerm = ${trueAction.resultTerm};
            |  $nullTerm = ${trueAction.nullTerm};
+           |  if (!$nullTerm) {
+           |    $resultTerm = ${trueAction.resultTerm};
+           |  }
            |}
            |else {
            |  ${falseAction.code}
-           |  $resultTerm = ${falseAction.resultTerm};
            |  $nullTerm = ${falseAction.nullTerm};
+           |  if (!$nullTerm) {
+           |    $resultTerm = ${falseAction.resultTerm};
+           |  }
            |}
            |""".stripMargin.trim
       }
